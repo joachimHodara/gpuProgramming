@@ -42,10 +42,11 @@ void flipImageH(Mat3b& img)
 
 /**
  * Flips an image in the direction specified by the user.
- * This function takes 3 arguments:
+ * This function takes 3 or 4 arguments:
  * @param argv[1] is the image filename
  * @param argv[2] is the flip direction ('v' or 'h')
  * @param argv[3] is the number of times the function gets repeated (for better timing)
+ * @param argv[4] (optional) number of threads
  */
 int main(int argc, char* argv[])
 {
@@ -58,14 +59,26 @@ int main(int argc, char* argv[])
   namedWindow("Source", WINDOW_AUTOSIZE);
   imshow("Source", image);
 
+  // Read-in the flip direction
+  char flipDirection = argv[2][0];
+
   // number of times the function will be computed (must be an odd number or nothing happens)
   const size_t num_repet = atoi(argv[3]);
   assert(num_repet % 2 != 0);
 
+  // Read-in the number of threads
+  int threads_number = 1;
+  if(argc == 5) {
+    threads_number = atoi(argv[4]);
+    cout << "Executing in parallel using " << threads_number << " threads." << endl;
+  }
+  else
+    cout << "Executing in serial..." << endl;
+
   auto start = std::chrono::high_resolution_clock::now();
 
   // Rotate the image depending on the user input
-  switch(argv[2][0]) {
+  switch(flipDirection) {
     case 'v': for(size_t it = 0; it < num_repet; ++it) flipImageV(image); break;
     case 'h': for(size_t it = 0; it < num_repet; ++it) flipImageH(image); break;
     default: cerr << "Invalid argument to main" << endl;
