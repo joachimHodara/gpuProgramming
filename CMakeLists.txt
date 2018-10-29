@@ -6,4 +6,4 @@ add_executable(${PROJECT_NAME} "imflip.cpp")
 
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 
-target_link_libraries(${PROJECT_NAME} opencv_core opencv_imgcodecs opencv_imgproc opencv_highgui)
+target_link_libraries(${PROJECT_NAME} pthread opencv_core opencv_imgcodecs opencv_imgproc opencv_highgui)

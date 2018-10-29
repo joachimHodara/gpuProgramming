@@ -4,6 +4,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <thread>
 
 using namespace cv;
 using namespace std;
@@ -11,12 +12,17 @@ using namespace std;
 /**
  * Flip the image in the vertical direction
  */
-void flipImageV(Mat3b& img)
+inline void flipImageV(size_t nthreads, size_t tid, Mat3b& img)
 {
   const size_t nrows = img.rows;
   const size_t ncols = img.cols;
+
+  const size_t cols_per_thread = ceil(float(ncols)/nthreads);
+  const size_t colb = tid*cols_per_thread;
+  const size_t cole = min(colb + cols_per_thread, ncols);
+
   for(size_t i = 0; i < nrows/2; ++i) {
-    for(size_t j = 0; j < ncols; ++j) {
+    for(size_t j = colb; j < cole; ++j) {
       Vec3b temp_pixel{img(i,j)};
       img(i,j) = img(nrows-i-1,j);
       img(nrows-i-1,j) = temp_pixel;
@@ -27,16 +33,33 @@ void flipImageV(Mat3b& img)
 /**
  * Flip the image in the horizontal direction
  */
-void flipImageH(Mat3b& img)
+inline void flipImageH(size_t nthreads, size_t tid, Mat3b& img)
 {
   const size_t nrows = img.rows;
   const size_t ncols = img.cols;
-  for(size_t i = 0; i < nrows; ++i) {
+
+  const size_t rows_per_thread = ceil(float(nrows)/nthreads);
+  const size_t rowb = tid*rows_per_thread;
+  const size_t rowe = min(rowb + rows_per_thread, nrows);
+
+  for(size_t i = rowb; i < rowe; ++i) {
     for(size_t j = 0; j < ncols/2; ++j) {
       Vec3b temp_pixel{img(i,j)};
       img(i,j) = img(i,ncols-j-1);
       img(i,ncols-j-1) = temp_pixel;
     }
+  }
+}
+
+/**
+ * Dispatch to the right function based on user input
+ */
+void flipImage(Mat3b& image, size_t nthreads, size_t tid, size_t number_repet, char flip_direction)
+{
+  switch(flip_direction) {
+    case 'v': for(size_t it=0; it<number_repet; ++it) flipImageV(nthreads, tid, image); break;
+    case 'h': for(size_t it=0; it<number_repet; ++it) flipImageH(nthreads, tid, image); break;
+    default: cerr << "Invalid argument to main" << endl;
   }
 }
 
@@ -56,11 +79,11 @@ int main(int argc, char* argv[])
     cerr << "Could not read image" << endl;
     return 1;
   }
-  namedWindow("Source", WINDOW_AUTOSIZE);
-  imshow("Source", image);
+//  namedWindow("Source", WINDOW_AUTOSIZE);
+//  imshow("Source", image);
 
   // Read-in the flip direction
-  char flipDirection = argv[2][0];
+  char flip_direction = argv[2][0];
 
   // number of times the function will be computed (must be an odd number or nothing happens)
   const size_t num_repet = atoi(argv[3]);
@@ -78,20 +101,23 @@ int main(int argc, char* argv[])
   auto start = std::chrono::high_resolution_clock::now();
 
   // Rotate the image depending on the user input
-  switch(flipDirection) {
-    case 'v': for(size_t it = 0; it < num_repet; ++it) flipImageV(image); break;
-    case 'h': for(size_t it = 0; it < num_repet; ++it) flipImageH(image); break;
-    default: cerr << "Invalid argument to main" << endl;
-  }
+  vector<thread> threads(threads_number);
+  for(size_t tid = 0; tid < threads_number; ++tid) 
+    threads[tid] = thread(flipImage, std::ref(image), threads_number, tid, num_repet, flip_direction);
+
+  cout << "The " << threads_number << " threads have been unleashed!" << endl;
+
+  for(size_t tid = 0; tid < threads_number; ++tid) 
+    threads[tid].join();
 
   auto stop = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed_time = stop - start;
   cout << "Elapsed time per call: " << 1000.0*elapsed_time.count()/num_repet << "ms" << endl;
 
   // display the final image
-  namedWindow("Destination", WINDOW_AUTOSIZE);
-  imshow("Destination", image);
-  waitKey(0);
+//  namedWindow("Destination", WINDOW_AUTOSIZE);
+//  imshow("Destination", image);
+//  waitKey(0);
   cout << "Closing ..." << endl;
 
   return 0;
