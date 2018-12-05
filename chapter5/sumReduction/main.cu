@@ -3,13 +3,13 @@
 #include <vector>
 using namespace std;
 
-
 __global__
-void sumReduction(float* v, int size)
+void sumReduction(float* v, int size, int jump)
 {
     // linear id
     unsigned int t = threadIdx.x;
-    unsigned int k = blockIdx.x*blockDim.x + t;
+	unsigned int t0 = blockIdx.x*blockDim.x;
+    unsigned int k = jump*(t0 + t);
 
     // load vector into shared memory
     extern __shared__ float vs[]; 
@@ -21,8 +21,8 @@ void sumReduction(float* v, int size)
             vs[t] += vs[t + stride];
     }
 
-    if(k == 0)
-        v[0] = vs[0];
+	if (t == 0)
+		v[jump*t0] = vs[0];
 }
 
 int main(int argc, char* argv[])
@@ -54,14 +54,17 @@ int main(int argc, char* argv[])
     cudaMemcpy((void*)d_vec, (void*)vec.data(), size*sizeof(float), cudaMemcpyHostToDevice);
 
     // call Kernel
-    int type = atoi(argv[2]);
-    if (type == 1) 
-        sumReduction<<<ceil(size/256.0f), 256, 256*sizeof(float)>>>(d_vec, size);
-    else
-        cout << "invalid argument!" << endl;
+	int blockDim = 4;
+	int jump = 1;
+	int number_of_blocks = size;
+	do {
+		number_of_blocks = ceil(number_of_blocks/(float)blockDim);
+		sumReduction<<<number_of_blocks, blockDim, blockDim*sizeof(float)>>>(d_vec, size, jump);
+		jump *= 4;
+	} while (number_of_blocks != 1);
 
     // Recover vector from device to host
-    cudaMemcpy((void*)vec.data(), (void*)d_vec, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy((void*)vec.data(), (void*)d_vec, size*sizeof(float), cudaMemcpyDeviceToHost);
 
     // Check results
     if (fabs(vec[0] - size) > 0.0001f)
