@@ -4,8 +4,11 @@
 #include <vector>
 using namespace std;
 
+#define MAX_MASK_WIDTH 10
+__constant__ float M[MAX_MASK_WIDTH];
+
 __global__
-void convolution(const float* N, const float* M, float* P, int mask_width, int width)
+void convolution1(const float* N, const float* M, float* P, int mask_width, int width)
 {
     unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -14,6 +17,21 @@ void convolution(const float* N, const float* M, float* P, int mask_width, int w
 	for (int j = 0; j < mask_width; ++j) {
 		if (N_start_point + j >= 0 && N_start_point + j < width) {
 			Pvalue += N[N_start_point + j]*M[j];
+		}
+	}
+	P[i] = Pvalue;
+}
+
+__global__
+void convolution2(const float* N, float* P, int mask_width, int width)
+{
+	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
+
+	float Pvalue = 0.0f;
+	int N_start_point = i - (mask_width / 2);
+	for (int j = 0; j < mask_width; ++j) {
+		if (N_start_point + j >= 0 && N_start_point + j < width) {
+			Pvalue += N[N_start_point + j] * M[j];
 		}
 	}
 	P[i] = Pvalue;
@@ -41,8 +59,6 @@ int main(int argc, char* argv[])
 
     // creating vector on host side
     vector<float> h_N(size, 1.0f);
-//    vector<float> h_N(size);
-//	std::iota(h_N.begin(), h_N.end(), 1.0f);
 
     // Copy vector on device side
     float* d_N;
@@ -52,9 +68,7 @@ int main(int argc, char* argv[])
 	// Create mask and send to devide
 	vector<float> h_M = { 1.0f, 1.0f, 2.0f, 1.0f, 1.0f };
 	int mask_width = h_M.size();
-    float* d_M;
-    cudaMalloc((void**)&d_M, mask_width*sizeof(float));
-    cudaMemcpy((void*)d_M, (void*)h_M.data(), mask_width*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpyToSymbol((void*)M, (void*)h_M.data(), mask_width*sizeof(float));
 
 	// Allocate space for solution on device
     float* d_P;
@@ -63,7 +77,7 @@ int main(int argc, char* argv[])
     // call Kernel
 	int blockDim = 4;
 	int gridDim = ceil(size/(float)blockDim);
-	convolution<<<gridDim, blockDim>>>(d_N, d_M, d_P, mask_width, size);
+	convolution2<<<gridDim, blockDim>>>(d_N, d_P, mask_width, size);
 
     // Recover vector from device to host
 	vector<float> h_P(size);
@@ -75,7 +89,6 @@ int main(int argc, char* argv[])
 	cout << endl;
 
     // Finalize storage
-    cudaFree(d_M);
     cudaFree(d_N);
     cudaFree(d_P);
 
