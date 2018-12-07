@@ -1,11 +1,15 @@
+#include <cassert>
 #include <cuda.h>
+#include <cuda_runtime.h>
 #include <iostream>
 #include <numeric>
 #include <vector>
 using namespace std;
 
+#define TILE_SIZE 256
 #define MAX_MASK_WIDTH 10
-__constant__ float M[MAX_MASK_WIDTH];
+
+__constant__ float c_M[MAX_MASK_WIDTH];
 
 __global__
 void convolution1(const float* N, const float* M, float* P, int mask_width, int width)
@@ -31,8 +35,38 @@ void convolution2(const float* N, float* P, int mask_width, int width)
 	int N_start_point = i - (mask_width / 2);
 	for (int j = 0; j < mask_width; ++j) {
 		if (N_start_point + j >= 0 && N_start_point + j < width) {
-			Pvalue += N[N_start_point + j] * M[j];
+			Pvalue += N[N_start_point + j] * c_M[j];
 		}
+	}
+	P[i] = Pvalue;
+}
+
+__global__
+void convolution3(const float* N, float* P, int mask_width, int width)
+{
+	unsigned int i = blockIdx.x*blockDim.x + threadIdx.x;
+	__shared__ float Nds[TILE_SIZE + MAX_MASK_WIDTH - 1];
+
+	// load N from global memory into shared memory
+	int n = mask_width/2;
+
+	if (threadIdx.x >= blockDim.x - n) {
+		int halo_index_left = (blockIdx.x - 1)*blockDim.x + threadIdx.x;
+		Nds[threadIdx.x - (blockDim.x - n)] = (halo_index_left < 0) ? 0 : N[halo_index_left];
+	}
+
+	Nds[n + threadIdx.x] = N[i];
+
+	if (threadIdx.x < n) {
+		int halo_index_right = (blockIdx.x + 1)*blockDim.x + threadIdx.x;
+		Nds[n + blockDim.x + threadIdx.x] = (halo_index_right >= width) ? 0 : N[halo_index_right];
+	}
+
+	__syncthreads();
+
+	float Pvalue = 0.0f;
+	for (int j = 0; j < mask_width; ++j) {
+		Pvalue += Nds[threadIdx.x + j]*c_M[j];
 	}
 	P[i] = Pvalue;
 }
@@ -59,6 +93,7 @@ int main(int argc, char* argv[])
 
     // creating vector on host side
     vector<float> h_N(size, 1.0f);
+	std::iota(h_N.begin(), h_N.end(), 0.0f);
 
     // Copy vector on device side
     float* d_N;
@@ -68,25 +103,21 @@ int main(int argc, char* argv[])
 	// Create mask and send to devide
 	vector<float> h_M = { 1.0f, 1.0f, 2.0f, 1.0f, 1.0f };
 	int mask_width = h_M.size();
-    cudaMemcpyToSymbol((void*)M, (void*)h_M.data(), mask_width*sizeof(float));
+	assert(mask_width < MAX_MASK_WIDTH);
+    cudaMemcpyToSymbol(c_M, (void*)h_M.data(), mask_width*sizeof(float));
 
 	// Allocate space for solution on device
     float* d_P;
     cudaMalloc((void**)&d_P, size*sizeof(float));
 
     // call Kernel
-	int blockDim = 4;
+	int blockDim = TILE_SIZE;
 	int gridDim = ceil(size/(float)blockDim);
-	convolution2<<<gridDim, blockDim>>>(d_N, d_P, mask_width, size);
+	convolution3<<<gridDim, blockDim>>>(d_N, d_P, mask_width, size);
 
     // Recover vector from device to host
 	vector<float> h_P(size);
     cudaMemcpy((void*)h_P.data(), (void*)d_P, size*sizeof(float), cudaMemcpyDeviceToHost);
-
-    // Check results
-	for (auto elt : h_P)
-		cout << elt << " ";
-	cout << endl;
 
     // Finalize storage
     cudaFree(d_N);
