@@ -82,6 +82,8 @@ int main(int argc, char* argv[])
     for(auto elt : h_count) cout << elt << " ";
     cout << endl;
 
+    cudaFree(d_data);
+    cudaFree(d_count);
     cout << "Closing..." << endl;
 
     return 0;
