@@ -11,5 +11,5 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 project(bezier LANGUAGES CXX CUDA)
 
-add_executable(${PROJECT_NAME} "main.cu")
+add_executable(${PROJECT_NAME} "main.cu" ${CUDA_LIBRARIES})
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)

@@ -1,16 +1,19 @@
 #include <cuda.h>
+#include <cuda_runtime.h>
 #include <iostream>
 #include <random>
 #include <vector>
 using namespace std;
 
+#define N_LINES 256
 #define MAX_TESS_POINTS 32
+#define BLOCK_DIM 32
 
 // Contains all the parameters required to tessellate a Bezier line
 struct BezierLine
 {
 	float2 CP[3];                      // control points
-	float2 vertexPos[MAX_TESS_POINTS]; // vertex position array to tessellate into
+	float2* vertexPos;                 // vertex position array to tessellate into
 	int nVertices;                     // number of tessellated vertices
 };
 
@@ -63,38 +66,50 @@ float computeCurvature(const BezierLine& bLine)
 }
 
 __global__
-void computeBezierLines(BezierLine* bLines, int nLines)
+void computeBezierLines_child(int lidx, BezierLine* bLines, int nTessPoints)
 {
-	int bidx = blockIdx.x;
-	if (bidx < nLines) {
-		// compute the curvature of the line
-		float curvature = computeCurvature(bLines[bidx]);
-
-		// compute the number of tessellation points from curvature (between 4 and 32)
-		int nTessPoints = min(max((int)(curvature*16), 4), 32);
-		bLines[bidx].nVertices = nTessPoints;
-
-		// Loop through vertices to be tessellated
-		for (int inc = 0; inc < nTessPoints; inc += blockDim.x) {
-			int idx = inc + threadIdx.x; 
-			if (idx < nTessPoints) {
-				float u = (float)idx/(float)(nTessPoints - 1);
-				float omu = 1.0f - u;
-				float B3u[3];
-				B3u[0] = omu*omu;
-				B3u[1] = 2.0f*omu*u;
-				B3u[2] = u*u;
-				float2 position = {0, 0};
-				for (int i = 0; i < 3; ++i)
-					position = position + B3u[i]*bLines[bidx].CP[i];
-				bLines[bidx].vertexPos[idx] = position;
-			}
-		}
+	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	if (idx < nTessPoints) {
+		float u = (float)idx / (float)(nTessPoints - 1);
+		float omu = 1.0f - u;
+		float B3u[3];
+		B3u[0] = omu*omu;
+		B3u[1] = 2.0f*omu*u;
+		B3u[2] = u*u;
+		float2 position = { 0, 0 };
+		for (int i = 0; i < 3; ++i)
+			position = position + B3u[i]*bLines[lidx].CP[i];
+		bLines[lidx].vertexPos[idx] = position;
 	}
 }
 
-#define N_LINES 256
-#define BLOCK_DIM 32
+__global__
+void computeBezierLines_parent(BezierLine* bLines, int nLines)
+{
+	int lidx = blockIdx.x*blockDim.x + threadIdx.x;
+	if (lidx < nLines) {
+		// compute the curvature of the line
+		float curvature = computeCurvature(bLines[lidx]);
+
+		// compute the number of tessellation points from curvature (between 4 and 32)
+		bLines[lidx].nVertices = min(max((int)(curvature * 16), 4), MAX_TESS_POINTS);
+		cudaMalloc((void**)&bLines[lidx].vertexPos, bLines[lidx].nVertices*sizeof(float2));
+
+		// Call child kernel to do the actual math
+		cudaStream_t stream;
+		cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+		computeBezierLines_child<<<ceil(bLines[lidx].nVertices/32.0f),32, 0, stream>>>(lidx, bLines, bLines[lidx].nVertices);
+		cudaStreamDestroy(stream);
+	}
+}
+
+__global__
+void freeVertexMem(BezierLine* bLines, int nLines)
+{
+	int lidx = threadIdx.x + blockIdx.x*blockDim.x;
+	if (lidx < nLines)
+		cudaFree(bLines[lidx].vertexPos);
+}
 
 // Initialize Bezier lines randomly
 void initializeBLines(vector<BezierLine>& bLines)
@@ -138,19 +153,15 @@ int main(int argc, char* argv[])
 
 	// Allocate and copy BLines to device
 	BezierLine* bLines_d;
-	cudaMalloc((void**)&bLines_d, N_LINES*sizeof(BezierLine));
-	cudaMemcpy((void*)bLines_d, (void*)bLines_h.data(), N_LINES*sizeof(BezierLine), cudaMemcpyHostToDevice);
+	cudaMalloc((void**)&bLines_d, N_LINES * sizeof(BezierLine));
+	cudaMemcpy((void*)bLines_d, (void*)bLines_h.data(), N_LINES * sizeof(BezierLine), cudaMemcpyHostToDevice);
 
 	// Call kernel
-	computeBezierLines<<<N_LINES, BLOCK_DIM>>>(bLines_d, N_LINES);
-
-	// Get results back on host side
-	cudaMemcpy((void*)bLines_h.data(), (void*)bLines_d, N_LINES*sizeof(BezierLine), cudaMemcpyDeviceToHost);
-	for (const auto& bLine : bLines_h) {
-		cout << bLine;
-	}
+	cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount, N_LINES);
+	computeBezierLines_parent<<<(float)N_LINES/(float)BLOCK_DIM, BLOCK_DIM>>>(bLines_d, N_LINES);
 
 	// Release device memory
+	freeVertexMem<<<(float)N_LINES/(float)BLOCK_DIM, BLOCK_DIM>>>(bLines_d, N_LINES);
 	cudaFree(bLines_d);
 
     cout << "Closing..." << endl;
